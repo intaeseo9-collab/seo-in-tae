@@ -86,6 +86,7 @@ h2{font-size:15px;margin:0;letter-spacing:-.01em}
 .stat .v{font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
 .stat .v small{font-size:14px;color:var(--muted);font-weight:500;margin-left:2px}
 .banner{border-radius:14px;padding:12px 14px;background:var(--warn-soft);color:var(--ink);font-size:14px;display:flex;gap:10px;align-items:center}
+.banner.bad{background:var(--bad-soft)}
 input[type=text],input[type=number],input[type=time],select{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-width:0}
 input[type=number]{width:80px}
 input[type=range]{width:100%;accent-color:var(--brand)}
@@ -251,8 +252,14 @@ code{font-family:var(--num);font-size:12px;word-break:break-all}
     <div class="row" id="targetInputs"></div>
     <div class="row"><button class="btn sm" id="btnTargetSave">저장</button><button class="btn sm ghost" id="btnTargetReset">가이드 값으로</button></div>
   </div>
+  <div class="banner" id="mFit" hidden></div>
   <div class="tip" id="mTip" hidden></div>
   <div class="tip" id="mPersonal" hidden></div>
+  <div class="card" id="uniBox" hidden>
+    <div class="card-head"><h2>한쪽씩 측정</h2><div class="seg" id="uniSeg"><button data-uni="L">왼쪽 다리</button><button data-uni="R">오른쪽 다리</button></div></div>
+    <div class="small muted">한 다리씩 하는 운동이라 양쪽 동시 편차 경고는 끄고, 고른 다리만 반복을 셉니다. 왼쪽 세트와 오른쪽 세트를 각각 측정하면 세트끼리 비교해 드려요.</div>
+    <div class="small" id="uniCmp"></div>
+  </div>
 
   <div class="gauges">
     <div class="gauge L" id="gaugeL"></div>
@@ -389,6 +396,7 @@ code{font-family:var(--num);font-size:12px;word-break:break-all}
     <div><div class="v" id="gCombo">0</div><div class="k">콤보</div></div>
     <div><div class="v" id="gPerf">0</div><div class="k">PERFECT</div></div>
   </div>
+  <button class="cta stop" id="gEnd" hidden>게임 종료<small>점수와 좌우 각도를 기록에 저장해요</small></button>
 </section>
 </main>
 
@@ -432,7 +440,7 @@ const defaults = () => ({
   settings: { thr: 5, vibrate: true, sound: true, voice: false, remind: false, remindAt: '20:00', theme: 'system', plan: 'free' },
   ble: { ...DEFAULT_BLE },
   calib: { L: { zero: 0, dir: 1 }, R: { zero: 0, dir: 1 } },
-  favorites: ['squat', 'heelslide'], targets: {}, sessions: [], lastEx: 'squat', remindedOn: ''
+  favorites: ['squat', 'heelslide'], targets: {}, sessions: [], lastEx: 'squat', remindedOn: '', uniSide: 'L'
 });
 function deepMerge(a, b) {
   for (const k in b) {
@@ -452,6 +460,7 @@ function save() {
   }
 }
 const isPro = () => db.settings.plan === 'pro';
+
 
 /* ================= 종목 마스터 ================= */
 // t: {type:'flex', lo, hi} = 반복마다 최대 굴곡이 lo~hi / {type:'ext', max} = 반복마다 max° 이하까지 펴기
@@ -508,7 +517,7 @@ const EX = [
     tip: '허벅지 평행(무릎 100–120°)까지 매번 같은 깊이로 앉기.',
     steps: ['공을 가슴 앞에 안기', '스쿼트로 앉기', '무릎 100–120° — 허벅지 평행', '일어서며 목표 높이로 던지기'],
     caution: ['공을 받을 때 바로 다음 스쿼트로 이어가기', '무릎이 안쪽으로 모이지 않게'] },
-  { id: 'kbswing',    name: '케틀벨 스윙',             cat: '전신', joint: '무릎', t: { type: 'flex', lo: 10, hi: 25 }, ev: 'study',
+  { id: 'kbswing',    name: '케틀벨 스윙',             cat: '전신', joint: '무릎', t: { type: 'flex', lo: 10, hi: 25 }, ev: 'study', minAmp: 8,   // 무릎이 20° 안팎만 움직여서 반복 인식 기준을 낮춤
     tip: '스쿼트가 아니라 힙 힌지. 무릎은 약 20° 안팎만 살짝 굽힙니다.',
     steps: ['발을 어깨보다 약간 넓게', '엉덩이를 뒤로 접으며 다리 사이로', '무릎은 10–25°만 — 엉덩이로 접기', '엉덩이를 앞으로 차며 가슴 높이까지'],
     caution: ['팔로 들어 올리지 말고 엉덩이 힘으로', '허리가 둥글게 말리지 않게'] },
@@ -541,6 +550,35 @@ const EX = [
     steps: ['팔뚝을 테이블에 올리기', '손목만 테이블 밖으로', '손등 쪽으로 50–70° 젖히기', '천천히 제자리로'],
     caution: ['팔뚝은 움직이지 않게', '저림·통증이 있으면 중단'] }
 ];
+/* 지금 보호대(무릎용 1축 경첩 + AS5600)로 잴 수 있는지 검토한 결과
+   ok 가능 · brace 팔꿈치 전용 보호대 필요 · ref 참고용(각도가 자세 기준으로 부정확) · no 경첩 센서로 측정 불가(영상만) */
+const FIT_INFO = { brace: ['warn', '팔꿈치 보호대 필요'], ref: ['warn', '참고용 · 팔꿈치 보호대 필요'], no: ['bad', '측정 불가 · 영상만'] };
+const ELBOW_NOTE = '팔꿈치도 경첩처럼 움직여서 원리상 측정돼요. 다만 지금 무릎 보호대는 팔에 맞지 않아 팔꿈치용 보호대를 끼워야 정확해요.';
+const PRESS_NOTE = '팔꿈치 각도는 그립 너비에 따라 달라서 바른 자세의 기준이 되기 어려워요(실제 기준은 바 깊이·위팔 위치). 무거운 무게에서는 커프가 밀리고 벤치에 경첩이 닿을 수 있어 참고용으로만 보세요. 팔꿈치용 보호대가 필요해요.';
+const SHOULDER_NOTE = '어깨는 공 모양 관절이라 팔이 안팎으로 도는 각도는 경첩 센서로 잴 수 없어요. 기울기 센서(IMU)가 있어야 해요. 동작 영상만 참고하세요.';
+const WRIST_NOTE = '손목은 두 방향으로 움직이고 손이 짧아 경첩 축을 맞추기 어려워요. 손목 전용 작은 보호대가 필요해요. 동작 영상만 참고하세요.';
+const FIT = {
+  curl: ['brace', ELBOW_NOTE], tricep: ['brace', ELBOW_NOTE], elbowrom: ['brace', ELBOW_NOTE],
+  ohp: ['ref', PRESS_NOTE], bench: ['ref', PRESS_NOTE],
+  shoulderer: ['no', SHOULDER_NOTE], wristflex: ['no', WRIST_NOTE], wristext: ['no', WRIST_NOTE]
+};
+// 한 다리씩 하는 운동: 동시 좌우 편차 대신 왼쪽 세트와 오른쪽 세트를 비교한다
+const UNI = ['lunge', 'bss', 'tke', 'heelslide', 'seatedflex'];
+EX.forEach(e => { const f = FIT[e.id]; e.fit = f ? f[0] : 'ok'; e.fitNote = f ? f[1] : ''; e.uni = UNI.includes(e.id); });
+const fitPill = e => e.fit === 'ok' ? '' : ` <span class="pill ${FIT_INFO[e.fit][0]}">${FIT_INFO[e.fit][1]}</span>`;
+const SIDE_NAME = { L: '왼쪽', R: '오른쪽' };
+// 한쪽 세트의 대표 각도 (굴곡이면 평균 최대, 신전이면 평균 최소)
+function uniVal(s) {
+  const v = s && s.uni && s[s.uni];
+  if (!v) return null;
+  return s.target && s.target.type === 'ext' ? v.lowAvg ?? v.min : v.peakAvg ?? v.max;
+}
+// 같은 날 같은 종목의 반대쪽 세트 중 시간이 가장 가까운 것
+function uniPair(s) {
+  const other = s.uni === 'L' ? 'R' : 'L';
+  return db.sessions.filter(x => x.ex === s.ex && x.uni === other && dayKey(x.date) === dayKey(s.date))
+    .sort((a, b) => Math.abs(a.date - s.date) - Math.abs(b.date - s.date))[0] || null;
+}
 const exById = id => EX.find(e => e.id === id) || EX[0];
 const CATS = ['전체', '즐겨찾기', '하체', '상체', '전신', '재활'];
 
@@ -743,7 +781,7 @@ function speak(text) {
 
 /* ================= 반복 카운터 ================= */
 class RepCounter {
-  constructor() { this.h = 6; this.minAmp = 18; this.phase = 'idle'; this.base = null; this.peak = null; this.newWin(); }
+  constructor(minAmp = 18) { this.h = minAmp < 18 ? 4 : 6; this.minAmp = minAmp; this.phase = 'idle'; this.base = null; this.peak = null; this.newWin(); }
   newWin() { this.win = { L: { min: Infinity, max: -Infinity }, R: { min: Infinity, max: -Infinity } }; }
   update(x, L, R, t) {
     if (L != null) { this.win.L.min = Math.min(this.win.L.min, L); this.win.L.max = Math.max(this.win.L.max, L); }
@@ -785,8 +823,11 @@ function startSession() {
     return false;
   }
   const ex = exById(db.lastEx);
+  if (ex.fit === 'no') { toast(`${ex.name}은(는) 지금 보호대로 각도를 잴 수 없어요. ▶ 동작 영상만 볼 수 있어요.`, 3500); return false; }
+  const uni = ex.uni ? db.uniSide : null;
+  if (uni && !fresh(uni)) { toast(`${SIDE_NAME[uni]} 보호대 데이터가 없어요. 연결을 확인하거나 반대쪽 다리를 고르세요.`, 3500); return false; }
   Object.assign(Sess, {
-    running: true, ex, tg: targetFor(ex), t0: now(), startedAt: Date.now(), counter: new RepCounter(), reps: [], tick: 0, stride: 4,
+    running: true, ex, uni, tg: targetFor(ex), t0: now(), startedAt: Date.now(), counter: new RepCounter(ex.minAmp), reps: [], tick: 0, stride: 4,
     series: [], st: { L: { min: Infinity, max: -Infinity }, R: { min: Infinity, max: -Infinity }, devSum: 0, devN: 0, devMax: 0, overN: 0 },
     alerts: 0, overStart: 0, lastAlert: 0
   });
@@ -798,7 +839,9 @@ function startSession() {
   return true;
 }
 function sessionTick() {
-  const t = now(), L = fresh('L') ? SIDE.L.angle : null, R = fresh('R') ? SIDE.R.angle : null;
+  const t = now();
+  // 한쪽씩 모드면 고른 다리만 기록 (반대쪽은 서 있는 다리라 비교하지 않음)
+  const L = fresh('L') && Sess.uni !== 'R' ? SIDE.L.angle : null, R = fresh('R') && Sess.uni !== 'L' ? SIDE.R.angle : null;
   if (L == null && R == null) return;
   const st = Sess.st;
   if (L != null) { st.L.min = Math.min(st.L.min, L); st.L.max = Math.max(st.L.max, L); }
@@ -871,9 +914,9 @@ function stopSession() {
     overPct: st.devN ? Math.round(st.overN / st.devN * 100) : null, alerts: Sess.alerts,
     inTarget: tg ? reps.filter(r => r.verdict === 'in').length : null,
     repList: reps.map(r => ({ L: r.L ? +r.L.max.toFixed(1) : null, R: r.R ? +r.R.max.toFixed(1) : null, Lmin: r.L ? +r.L.min.toFixed(1) : null, Rmin: r.R ? +r.R.min.toFixed(1) : null, v: r.verdict })),
-    series: Sess.series, stride: Sess.stride
+    series: Sess.series, stride: Sess.stride, uni: Sess.uni || null
   };
-  db.sessions.push(s); save();
+  db.sessions.push(s); save(); renderMeasure();
   beep(520, 200); speak(`${s.reps}회 저장했어요`);
   renderHome(); openSession(s, true);
 }
@@ -921,6 +964,7 @@ function updateGauge(s) {
 /* ================= 화면: 공통 ================= */
 let tab = 'home';
 function go(t) {
+  if (tab === 'game' && t !== 'game' && G.on) gEndGame(true);   // 게임 중 다른 탭으로 가면 자동 저장
   tab = t;
   $$('.tabbar button').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
   $$('.scr').forEach(s => s.classList.toggle('active', s.id === 'scr-' + t));
@@ -986,7 +1030,7 @@ function sessCard(s) {
   const devCls = s.devAvg == null ? '' : s.devAvg <= s.thr * 0.6 ? 'ok' : s.devAvg <= s.thr ? 'warn' : 'bad';
   const peak = side => s[side] ? (s.target && s.target.type === 'ext' ? s[side].lowAvg ?? s[side].min : s[side].peakAvg ?? s[side].max) : null;
   return `<button class="sess" data-sess="${s.id}">
-    <span class="t">${esc(s.name)}</span><span class="num small">${s.reps}회</span>
+    <span class="t">${esc(s.name)}${s.uni ? ` <span class="pill ${s.uni}">${SIDE_NAME[s.uni]} 세트</span>` : ''}${s.game ? ` <span class="pill L">🚀 ${s.game.score.toLocaleString()}점</span>` : ''}</span><span class="num small">${s.reps}회</span>
     <span class="xs muted">${new Date(s.date).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${mmss(s.dur)}</span>
     <span>${s.devAvg != null ? `<span class="pill ${devCls}">편차 ${fmt(s.devAvg, 1)}°</span>` : ''}</span>
     ${bar('L', peak('L'))}${bar('R', peak('R'))}
@@ -1038,6 +1082,19 @@ function renderMeasure() {
   $('#mTip').hidden = !ex.tip; $('#mTip').textContent = '💡 ' + ex.tip;
   $('#mEv').textContent = ex.ev ? '목표 근거: ' + EV_TEXT[ex.ev] : '';
   $('#btnGuide').hidden = !ex.steps;
+  const fb = $('#mFit');
+  fb.hidden = ex.fit === 'ok';
+  if (ex.fit !== 'ok') { fb.className = 'banner' + (ex.fit === 'no' ? ' bad' : ''); fb.innerHTML = `${ex.fit === 'no' ? '❌' : '⚠️'} <span><b>${FIT_INFO[ex.fit][1]}</b><br><span class="small">${esc(ex.fitNote)}</span></span>`; }
+  $('#uniBox').hidden = !ex.uni;
+  if (ex.uni) {
+    const side = Sess.running && Sess.uni ? Sess.uni : db.uniSide;
+    $$('#uniSeg button').forEach(b => { b.classList.toggle('active', b.dataset.uni === side); b.disabled = Sess.running; });
+    // 오늘 이 종목의 마지막 왼쪽·오른쪽 세트
+    const today = db.sessions.filter(s => s.ex === ex.id && s.uni && dayKey(s.date) === dayKey(Date.now()));
+    const last = k => today.filter(s => s.uni === k).pop();
+    const a = uniVal(last('L')), b = uniVal(last('R'));
+    $('#uniCmp').innerHTML = a == null && b == null ? '' : `오늘 마지막 세트 · <b style="color:var(--L)">왼쪽 ${fmt(a)}°</b> · <b style="color:var(--R)">오른쪽 ${fmt(b)}°</b>${a != null && b != null ? ` → 차이 <span class="pill ${Math.abs(a - b) <= db.settings.thr ? 'ok' : 'bad'}">${fmt(Math.abs(a - b), 1)}°</span>` : ` — ${a == null ? '왼쪽' : '오른쪽'} 세트도 해보세요`}`;
+  }
   $('#mPersonal').hidden = !(tg && tg.note); $('#mPersonal').textContent = tg && tg.note ? '📈 ' + tg.note : '';
   $('#btnChangeEx').disabled = Sess.running; $('#btnEditTarget').disabled = Sess.running || !ex.t;
   $('#thrLabel').textContent = db.settings.thr;
@@ -1048,6 +1105,7 @@ function renderMeasure() {
   if (!Sess.running) { $('#rReps').textContent = '0'; $('#rTime').textContent = '0:00'; $('#rHit').textContent = '--'; }
 }
 $('#btnRun').onclick = () => Sess.running ? stopSession() : startSession();
+$$('#uniSeg button').forEach(b => b.onclick = () => { if (Sess.running) return; db.uniSide = b.dataset.uni; save(); renderMeasure(); });
 $('#btnChangeEx').onclick = () => go('library');
 $('#btnGuide').onclick = () => openGuide(db.lastEx);
 $('#btnEditTarget').onclick = () => {
@@ -1070,8 +1128,12 @@ $('#btnTargetReset').onclick = () => { delete db.targets[db.lastEx]; save(); $('
 function tickMeasure() {
   updateGauge('L'); updateGauge('R');
   const both = fresh('L') && fresh('R');
-  const db_ = $('#devBig');
-  if (both) {
+  const db_ = $('#devBig'), ex = Sess.running ? Sess.ex : exById(db.lastEx);
+  if (ex.uni) {
+    const side = Sess.running && Sess.uni ? Sess.uni : db.uniSide;
+    db_.textContent = `한쪽씩 · ${SIDE_NAME[side]} 다리 ${fresh(side) ? fmt(SIDE[side].angle) + '°' : '미연결'}`;
+    db_.className = 'devbig pill ' + side;
+  } else if (both) {
     const d = Math.abs(SIDE.L.angle - SIDE.R.angle), thr = db.settings.thr;
     db_.textContent = `좌우 편차 ${fmt(d, 1)}°`;
     db_.className = 'devbig pill ' + (d <= thr * 0.6 ? 'ok' : d <= thr ? 'warn' : 'bad');
@@ -1089,10 +1151,12 @@ function renderLibrary() {
   $('#catChips').innerHTML = CATS.map(c => `<button class="chip ${c === cat ? 'active' : ''}" data-cat="${c}">${c === '즐겨찾기' ? '★ ' : ''}${c}</button>`).join('');
   $$('[data-cat]').forEach(b => b.onclick = () => { cat = b.dataset.cat; renderLibrary(); });
   const q = $('#exSearch').value.trim();
-  const list = EX.filter(e => (cat === '전체' || (cat === '즐겨찾기' ? db.favorites.includes(e.id) : e.cat === cat)) && (!q || (e.name + e.cat + e.joint).includes(q)));
+  const order = { ok: 0, brace: 1, ref: 1, no: 2 };   // 측정 가능한 종목이 위로 (같은 등급은 원래 순서 유지)
+  const list = EX.filter(e => (cat === '전체' || (cat === '즐겨찾기' ? db.favorites.includes(e.id) : e.cat === cat)) && (!q || (e.name + e.cat + e.joint).includes(q)))
+    .sort((a, b) => order[a.fit] - order[b.fit]);
   $('#exList').innerHTML = list.map(e => {
     const fav = db.favorites.includes(e.id);
-    return `<div class="exrow"><button style="all:unset;cursor:pointer" data-pick="${e.id}"><div class="t">${esc(e.name)}${e.id === db.lastEx ? ' <span class="pill ok">선택됨</span>' : ''}</div><div class="xs muted">${e.cat} · ${e.joint} · ${targetText(targetFor(e))}${e.ev ? ' · ' + EV_TEXT[e.ev] : ''}</div></button>
+    return `<div class="exrow"><button style="all:unset;cursor:pointer" data-pick="${e.id}"><div class="t">${esc(e.name)}${e.id === db.lastEx ? ' <span class="pill ok">선택됨</span>' : ''}${e.uni ? ' <span class="pill">한쪽씩</span>' : ''}${fitPill(e)}</div><div class="xs muted">${e.cat} · ${e.joint} · ${targetText(targetFor(e))}${e.ev ? ' · ' + EV_TEXT[e.ev] : ''}</div></button>
       <div class="row" style="gap:2px;flex-wrap:nowrap">${e.steps ? `<button class="star" data-guide="${e.id}" aria-label="${esc(e.name)} 동작 영상">▶</button>` : ''}<button class="star ${fav ? 'on' : ''}" data-star="${e.id}" aria-label="즐겨찾기">${fav ? '★' : '☆'}</button></div>
       <button class="btn sm" data-pick="${e.id}">선택</button></div>`;
   }).join('') || '<div class="small muted" style="padding:16px 4px">해당하는 종목이 없어요.</div>';
@@ -1133,7 +1197,7 @@ function renderHistory() {
     title = `${mm}월 ${dd}일`;
     list = db.sessions.filter(s => dayKey(s.date) === selDay);
   } else { title = isPro() ? '전체 기록' : '최근 30일'; list = db.sessions.slice(); }
-  const shown = list.filter(visible).reverse(), hiddenN = list.length - list.filter(visible).length;
+  const shown = list.filter(visible).reverse(), hiddenN = list.length - shown.length;
   $('#dayTitle').textContent = title; $('#btnDayAll').hidden = !selDay;
   $('#dayList').innerHTML = shown.map(sessCard).join('') +
     (hiddenN ? `<div class="lock">🔒 <span>30일보다 오래된 세션 ${hiddenN}개는 Pro에서 볼 수 있어요.</span></div>` : '') +
@@ -1179,7 +1243,7 @@ function renderPro() {
   }
   if (cur.dev != null && prev.dev != null) comments.push(cur.dev < prev.dev ? `좌우 편차가 ${fmt(prev.dev, 1)}° → ${fmt(cur.dev, 1)}°로 줄었어요. 균형이 좋아지고 있어요.` : `좌우 편차가 ${fmt(prev.dev, 1)}° → ${fmt(cur.dev, 1)}°로 늘었어요. ${cur.L != null && cur.R != null ? (cur.L < cur.R ? '왼쪽' : '오른쪽') + '을 조금 더 신경 써보세요.' : ''}`);
   if (!comments.length) comments.push(cur.n ? '비교할 지난주 기록이 아직 부족해요. 2주 이상 기록하면 변화 코멘트가 나와요.' : '이번 주 이 종목 기록이 없어요.');
-  card.innerHTML = `<div class="card-head"><h2>좌우 추이 · 최근 8주</h2><select id="trendSel">${exIds.map(id => `<option value="${id}" ${id === trendEx ? 'selected' : ''}>${esc(exById(id).name)}</option>`).join('')}</select></div>
+  card.innerHTML = `<div class="card-head"><h2>좌우 추이 · 최근 8주</h2><select id="trendSel">${exIds.map(id => `<option value="${id}" ${id === trendEx ? 'selected' : ''}>${esc(exById(id).id === id ? exById(id).name : (db.sessions.find(s => s.ex === id) || {}).name || id)}</option>`).join('')}</select></div>
     <canvas id="trendChart" height="170"></canvas>
     <div class="row xs"><span class="pill L">L 평균 최대 각도</span><span class="pill R">R 평균 최대 각도</span></div>
     <div class="divider"></div>
@@ -1228,11 +1292,18 @@ function openSession(s, justSaved) {
       ${stat('최대 편차', `<span class="pill ${devCls}" style="font-size:18px">${fmt(s.devMax, 1)}°</span>`)}
       ${stat('목표 달성', tg ? `${s.inTarget}/${s.reps}` : '--')}
     </div>
+    ${s.game ? `<div class="banner" style="background:var(--L-soft)">🚀 <span>밸런스 로켓 점수 <b>${s.game.score.toLocaleString()}</b> · PERFECT ${s.game.perfect} · 최대 콤보 ${s.game.maxCombo} · 고도 ${Math.round(s.game.alt).toLocaleString()} m</span></div>` : ''}
+    ${s.uni ? (() => {
+      const p = uniPair(s), a = uniVal(s), b = uniVal(p), d = a != null && b != null ? Math.abs(a - b) : null;
+      return `<div class="banner" style="background:var(--${s.uni}-soft)">↔ <span><b>${SIDE_NAME[s.uni]} 다리 세트</b> (한쪽씩 측정)${p
+        ? ` · 같은 날 ${SIDE_NAME[p.uni]} 세트 ${fmt(b)}° vs 이번 ${fmt(a)}° → 세트 간 차이 <span class="pill ${d <= s.thr ? 'ok' : 'bad'}">${fmt(d, 1)}°</span>`
+        : ` · ${SIDE_NAME[s.uni === 'L' ? 'R' : 'L']} 다리 세트도 측정하면 좌우 세트를 비교해 드려요.`}</span></div>`;
+    })() : ''}
     <div class="small muted">평균 편차 ${fmt(s.devAvg, 1)}° · 기준(${s.thr}°) 초과 시간 ${fmt(s.overPct)}% · 경고 ${s.alerts}회 · 목표 ${targetText(tg)}${s.L ? ` · L 범위 ${fmt(s.L.min)}–${fmt(s.L.max)}°` : ''}${s.R ? ` · R 범위 ${fmt(s.R.min)}–${fmt(s.R.max)}°` : ''}</div>
     ${s.series && s.series.length > 2 ? `<div class="card"><h2>좌우 각도 그래프</h2><canvas id="sessChart" height="190"></canvas><div class="row xs"><span class="pill L">L</span><span class="pill R">R</span><span class="pill ok">목표 범위</span></div></div>` : ''}
     ${s.repList && s.repList.length ? `<div class="card"><h2>반복별 기록</h2><div class="tablewrap"><table><tr><th>#</th><th>L</th><th>R</th><th>편차</th><th>판정</th></tr>${s.repList.map((r, i) => {
       const a = tg && tg.type === 'ext' ? r.Lmin : r.L, b = tg && tg.type === 'ext' ? r.Rmin : r.R;
-      return `<tr><td>${i + 1}</td><td class="num" style="color:var(--L)">${fmt(a)}°</td><td class="num" style="color:var(--R)">${fmt(b)}°</td><td class="num">${a != null && b != null ? fmt(Math.abs(a - b), 1) + '°' : '--'}</td><td>${{ in: '✓ 목표', short: '부족', over: '과굴곡', none: '-' }[r.v] || '-'}</td></tr>`;
+      return `<tr><td>${i + 1}</td><td class="num" style="color:var(--L)">${fmt(a)}°</td><td class="num" style="color:var(--R)">${fmt(b)}°</td><td class="num">${a != null && b != null ? fmt(Math.abs(a - b), 1) + '°' : '--'}</td><td>${{ in: s.game ? '✓ PERFECT' : '✓ 목표', short: '부족', over: '과굴곡', tilt: '좌우 기울어짐', none: '-' }[r.v] || '-'}</td></tr>`;
     }).join('')}</table></div></div>` : ''}
     <div class="row"><button class="btn danger" id="sheetDel">이 기록 삭제</button></div>`;
   $('#sheet').hidden = false;
@@ -1354,9 +1425,9 @@ $('#btnBleSave').onclick = () => {
 };
 $('#btnBleDefault').onclick = () => { db.ble = { ...DEFAULT_BLE }; save(); renderSettings(); };
 $('#btnCsv').onclick = () => {
-  const head = 'date,exercise,category,duration_s,reps,target,L_peak_avg,R_peak_avg,L_min,L_max,R_min,R_max,dev_avg,dev_max,over_pct,alerts,in_target';
+  const head = 'date,exercise,category,duration_s,reps,target,L_peak_avg,R_peak_avg,L_min,L_max,R_min,R_max,dev_avg,dev_max,over_pct,alerts,in_target,game_score,side';
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const rows = db.sessions.map(s => [new Date(s.date).toISOString(), s.name, s.cat, s.dur, s.reps, targetText(s.target), s.L?.peakAvg, s.R?.peakAvg, s.L?.min, s.L?.max, s.R?.min, s.R?.max, s.devAvg, s.devMax, s.overPct, s.alerts, s.inTarget].map(q).join(','));
+  const rows = db.sessions.map(s => [new Date(s.date).toISOString(), s.name, s.cat, s.dur, s.reps, targetText(s.target), s.L?.peakAvg, s.R?.peakAvg, s.L?.min, s.L?.max, s.R?.min, s.R?.max, s.devAvg, s.devMax, s.overPct, s.alerts, s.inTarget, s.game?.score, s.uni].map(q).join(','));
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['﻿' + head + '\n' + rows.join('\n')], { type: 'text/csv' }));
   a.download = `angbrace-${dayKey(Date.now())}.csv`; a.click();
@@ -1413,21 +1484,56 @@ function gSize() {
 }
 for (let i = 0; i < 70; i++) G.stars.push({ x: Math.random(), y: Math.random(), r: Math.random() * 1.6 + 0.4, s: Math.random() * 0.6 + 0.4 });
 function gPop(text, col, big) { G.pops.push({ text, col, big, t: now() }); }
+// 게임 목표 깊이 = 스쿼트 목표(근거: 허벅지 평행 ≈ 무릎 100–120°). PERFECT는 목표 하한 -10° 이상 + 좌우 편차가 경고 기준 이하
+const gTarget = () => { const t = targetFor(exById('squat')); return t && t.type === 'flex' ? t : { type: 'flex', lo: 100, hi: 120 }; };
 function gStartGame() {
-  Object.assign(G, { on: true, score: 0, combo: 0, perf: 0, alt: 0, vel: 0, phase: 'up', peak: 0, maxDiff: 0, pops: [] });
-  $('#gStart').hidden = true; gHud(); gPop('스쿼트로 출발!', '#ffffff', true); beep(660, 120);
+  if (!fresh('L') && !fresh('R')) toast('보호대 데이터가 아직 없어요. 연결하거나 설정에서 시뮬레이션을 켜세요.', 3000);
+  Object.assign(G, { on: true, score: 0, combo: 0, maxCombo: 0, perf: 0, tilts: 0, alt: 0, vel: 0, phase: 'up', peak: 0, maxDiff: 0, pL: null, pR: null, pops: [],
+    reps: [], series: [], sTick: 0, t0: now(), startedAt: Date.now(),
+    st: { L: { min: Infinity, max: -Infinity }, R: { min: Infinity, max: -Infinity }, devSum: 0, devN: 0, devMax: 0, overN: 0 } });
+  $('#gStart').hidden = true; $('#gEnd').hidden = false; gHud(); gPop('스쿼트로 출발!', '#ffffff', true); beep(660, 120);
 }
 $('#gStart').onclick = gStartGame;
+$('#gEnd').onclick = () => gEndGame(false);
 function gHud() { $('#gScore').textContent = G.score.toLocaleString(); $('#gCombo').textContent = G.combo; $('#gPerf').textContent = G.perf; }
 function gRep(peak, md) {
-  if (peak >= 85 && md <= 5) {
-    G.combo++; G.perf++; const pt = 100 * G.combo; G.score += pt; G.vel += 26 + G.combo * 6;
+  const tg = gTarget(), deep = peak >= tg.lo - 10, thr = db.settings.thr;
+  let v;
+  if (deep && md <= thr) {
+    G.combo++; G.perf++; G.maxCombo = Math.max(G.maxCombo, G.combo); const pt = 100 * G.combo; G.score += pt; G.vel += 26 + G.combo * 6; v = 'in';
     gPop('PERFECT +' + pt, '#ffd54a', true); beep(1046, 90); setTimeout(() => beep(1568, 120), 90);
-  } else if (peak >= 85) {
-    G.combo = 0; G.score += 20; G.wob = 1; G.vel += 6;
+  } else if (deep) {
+    G.combo = 0; G.score += 20; G.wob = 1; G.vel += 6; G.tilts++; v = 'tilt';
     gPop('기울었어요! 좌우 ' + md.toFixed(0) + '°', '#ff7a6b', true); beep(330, 200); buzz(120);
-  } else { G.combo = 0; G.score += 10; gPop('조금 더 깊게', '#9fc3ff', false); }
+  } else { G.combo = 0; G.score += 10; v = 'short'; gPop('조금 더 깊게', '#9fc3ff', false); }
+  G.reps.push({ L: G.pL != null ? +G.pL.toFixed(1) : null, R: G.pR != null ? +G.pR.toFixed(1) : null, Lmin: null, Rmin: null, v });
   gHud();
+}
+function gEndGame(silent) {
+  if (!G.on) return;
+  G.on = false; $('#gStart').hidden = false; $('#gStart').textContent = '다시 시작'; $('#gEnd').hidden = true;
+  const dur = (now() - G.t0) / 1000;
+  if (!G.reps.length && dur < 3) { toast('기록할 반복이 없어서 저장하지 않았어요.'); return; }
+  const st = G.st, tg = gTarget();
+  const sideSum = sd => {
+    if (st[sd].max === -Infinity) return null;
+    const r = G.reps.filter(x => x[sd] != null);
+    return { min: +st[sd].min.toFixed(1), max: +st[sd].max.toFixed(1), rom: +(st[sd].max - st[sd].min).toFixed(1),
+      peakAvg: r.length ? +(r.reduce((a, x) => a + x[sd], 0) / r.length).toFixed(1) : null, lowAvg: null };
+  };
+  const L = sideSum('L'), R = sideSum('R'), peaks = [L && L.peakAvg, R && R.peakAvg].filter(v => v != null);
+  const s = {
+    id: Date.now().toString(36), date: G.startedAt, ex: 'game', name: '밸런스 로켓 (게임)', cat: '게임', joint: '무릎',
+    dur: Math.round(dur), reps: G.reps.length, target: { type: 'flex', lo: tg.lo, hi: tg.hi }, thr: db.settings.thr,
+    L, R, peakAvg: peaks.length ? +(peaks.reduce((a, v) => a + v, 0) / peaks.length).toFixed(1) : null,
+    devAvg: st.devN ? +(st.devSum / st.devN).toFixed(1) : null, devMax: st.devN ? +st.devMax.toFixed(1) : null,
+    overPct: st.devN ? Math.round(st.overN / st.devN * 100) : null, alerts: G.tilts, inTarget: G.perf,
+    repList: G.reps, series: G.series, stride: 4,
+    game: { score: G.score, perfect: G.perf, maxCombo: G.maxCombo, alt: Math.round(G.alt) }
+  };
+  db.sessions.push(s); save(); beep(520, 200);
+  if (silent) toast(`게임 기록을 저장했어요 · ${s.game.score.toLocaleString()}점`);
+  else { renderHome(); openSession(s, true); }
 }
 function gTick(t) {
   requestAnimationFrame(gTick);
@@ -1438,9 +1544,16 @@ function gTick(t) {
   const both = L != null && R != null, ok = L != null || R != null;
   const avg = both ? (L + R) / 2 : (L != null ? L : R != null ? R : 0), diff = both ? L - R : 0;
   if (G.on && ok) {
-    if (G.phase === 'up' && avg > 60) { G.phase = 'down'; G.peak = avg; G.maxDiff = Math.abs(diff); }
+    // 기록용 통계 (측정 세션과 같은 형식)
+    const st = G.st;
+    if (L != null) { st.L.min = Math.min(st.L.min, L); st.L.max = Math.max(st.L.max, L); }
+    if (R != null) { st.R.min = Math.min(st.R.min, R); st.R.max = Math.max(st.R.max, R); }
+    if (both) { const d = Math.abs(diff); st.devSum += d; st.devN++; st.devMax = Math.max(st.devMax, d); if (d > db.settings.thr) st.overN++; }
+    if (G.sTick++ % 12 === 0 && G.series.length < 3600) G.series.push([Math.round((now() - G.t0) / 100), L == null ? null : Math.round(L * 10), R == null ? null : Math.round(R * 10)]);
+    if (G.phase === 'up' && avg > 60) { G.phase = 'down'; G.peak = avg; G.maxDiff = Math.abs(diff); G.pL = L; G.pR = R; }
     else if (G.phase === 'down') {
       G.peak = Math.max(G.peak, avg); if (avg > 60) G.maxDiff = Math.max(G.maxDiff, Math.abs(diff));
+      if (L != null) G.pL = Math.max(G.pL ?? L, L); if (R != null) G.pR = Math.max(G.pR ?? R, R);
       if (avg < 30) { G.phase = 'up'; gRep(G.peak, G.maxDiff); }
     }
   }
@@ -1463,11 +1576,11 @@ function gTick(t) {
   // 깊이 게이지 (왼쪽)
   const gx = 18, gy = 70, gh = h - 190;
   c.fillStyle = 'rgba(255,255,255,.12)'; c.beginPath(); c.roundRect(gx, gy, 12, gh, 6); c.fill();
-  const yOf = a => gy + gh - clamp(a / 120, 0, 1) * gh;
-  c.fillStyle = 'rgba(47,207,140,.45)'; c.fillRect(gx, yOf(110), 12, yOf(90) - yOf(110));
+  const gt = gTarget(), yOf = a => gy + gh - clamp(a / 135, 0, 1) * gh;
+  c.fillStyle = 'rgba(47,207,140,.45)'; c.fillRect(gx, yOf(gt.hi), 12, yOf(gt.lo) - yOf(gt.hi));
   c.fillStyle = '#fff'; c.beginPath(); c.arc(gx + 6, yOf(avg), 9, 0, 7); c.fill();
   c.font = '600 11px ' + getComputedStyle(document.body).fontFamily; c.fillStyle = 'rgba(255,255,255,.7)'; c.fillText('깊이', gx - 2, gy - 10);
-  c.fillStyle = '#2fcf8c'; c.fillText('목표', gx + 18, yOf(100) + 4);
+  c.fillStyle = '#2fcf8c'; c.fillText(`목표 ${gt.lo}–${gt.hi}°`, gx + 18, yOf((gt.lo + gt.hi) / 2) + 4);
   // 로켓
   const rx = w / 2 + G.tilt * 1.6 + Math.sin(t / 60) * 6 * G.wob, ry = h * 0.52 - Math.min(60, G.vel * 0.8);
   c.save(); c.translate(rx, ry); c.rotate((G.tilt + Math.sin(t / 50) * 14 * G.wob) * Math.PI / 180);
